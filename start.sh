@@ -10,25 +10,41 @@ mkdir -p "${MODEL_DIR}" "${HF_HOME}"
 MODEL_URL="https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/resolve/main/v7/Qwen-Rapid-AIO-NSFW-v7.1.safetensors?download=true"
 MODEL_FILE="Qwen-Rapid-AIO-NSFW-v7.1.safetensors"
 MODEL_PATH="${MODEL_DIR}/${MODEL_FILE}"
-TMP_PATH="${MODEL_PATH}.part"
+PART_PATH="${MODEL_PATH}.part"
+LOCK_PATH="${MODEL_PATH}.lock"
 
 download_model () {
-  if [ -f "${MODEL_PATH}" ]; then
+  # If final model exists, do nothing
+  if [ -s "${MODEL_PATH}" ]; then
     echo "Model already present: ${MODEL_PATH}"
     return 0
   fi
 
-  echo "Downloading model in background..."
-  echo "URL: ${MODEL_URL}"
-  echo "TMP: ${TMP_PATH}"
+  # Prevent multiple parallel downloads on restarts
+  if [ -f "${LOCK_PATH}" ]; then
+    echo "Download lock exists (${LOCK_PATH}). Assuming download is/was in progress."
+    # If .part exists, we try to resume it
+  else
+    date > "${LOCK_PATH}"
+  fi
 
-  # resume download into .part
-  wget -c --tries=50 --timeout=30 --waitretry=5 -O "${TMP_PATH}" "${MODEL_URL}"
+  echo "Downloading/resuming model..."
+  echo "URL:  ${MODEL_URL}"
+  echo "PART: ${PART_PATH}"
 
-  mv "${TMP_PATH}" "${MODEL_PATH}"
-  echo "Download complete: ${MODEL_PATH}"
-  ls -lh "${MODEL_DIR}"
-  echo "NOTE: Refresh ComfyUI page (or restart service) to see the new checkpoint in dropdown."
+  # Resume download into .part (works if it already exists)
+  wget -c --tries=50 --timeout=30 --waitretry=5 -O "${PART_PATH}" "${MODEL_URL}"
+
+  # Only move into place if we actually got a non-empty file
+  if [ -s "${PART_PATH}" ]; then
+    mv -f "${PART_PATH}" "${MODEL_PATH}"
+    rm -f "${LOCK_PATH}"
+    echo "Download complete: ${MODEL_PATH}"
+    ls -lh "${MODEL_DIR}"
+  else
+    echo "ERROR: Download produced empty part file. Leaving lock for debugging."
+    exit 1
+  fi
 }
 
 # Start ComfyUI immediately so health checks pass
@@ -40,5 +56,4 @@ COMFY_PID=$!
 # Download in background
 download_model &
 
-# Keep container running
 wait "${COMFY_PID}"
